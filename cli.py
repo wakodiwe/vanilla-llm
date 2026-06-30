@@ -1,5 +1,4 @@
 """
-ACMD vanilla-cli.py BufWritePost Term ./app.py
 A lightweight, zero‑bloat wrapper for OpenAI‑compatible LLM APIs.
 """
 
