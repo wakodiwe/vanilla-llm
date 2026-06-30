@@ -4,12 +4,11 @@ from cli import llm, MODEL
 SYSTEM = "You are a helpful assistant."
 
 if __name__ == "__main__":
-    msg = lambda r, c: {"role": r, "content": c}
-    conv = [msg("system", SYSTEM)]
+    conv = [{"role": "system", "content": SYSTEM}]
 
     if len(sys.argv) > 1:
-        conv.append(msg("user", " ".join(sys.argv[1:])))
-        llm.stream_print(conv, model=MODEL)
+        conv.append({"role": "user", "content": " ".join(sys.argv[1:])})
+            llm.ask(conv, model=MODEL)
     else:
         print("Welcome to VanillaChat! Type 'exit' to quit.")
         while True:
@@ -19,6 +18,6 @@ if __name__ == "__main__":
                 print("\nBye."); break
             if user.lower() in ("exit", "quit"):
                 print("Bye."); break
-            conv.append(msg("user", user))
-            conv.append(msg("assistant", llm.stream_print(conv, model=MODEL)))
+            conv.append({"role": "user", "content": user})
+            conv.append({"role": "assistant", "content": llm.ask(conv, model=MODEL)})
         llm.close()
