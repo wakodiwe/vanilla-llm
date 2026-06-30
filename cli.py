@@ -7,6 +7,8 @@ import json
 import sys
 import time
 
+from prompt_toolkit import prompt
+
 import httpx
 
 
@@ -36,13 +38,14 @@ class VanillaLLM:
                 print(f"Attempt {attempt + 1} failed. Retrying...")
         raise err
 
-    def ask(self, messages, *, model: str = MODEL, **kw) -> str:
+    def ask(self, messages, *, model: str = MODEL, temperature: float = 0.7, max_tokens: int = 1024, verbose: bool = True, **kw) -> str:
         payload = {
-            "model": model, "messages": messages, "temperature": 0.7,
-            "max_tokens": 1024, "stream": True, **kw,
+            "model": model, "messages": messages, "temperature": temperature,
+            "max_tokens": max_tokens, "stream": True, **kw,
         }
         full = []
-        print("Assistant: ", end="", flush=True)
+        if verbose:
+            print("Assistant: ", end="", flush=True)
         with self._client.stream("POST", "/chat/completions", json=payload) as s:
             s.raise_for_status()
             for line in s.iter_lines():
@@ -53,11 +56,12 @@ class VanillaLLM:
                     break
                 try:
                     delta = json.loads(chunk)["choices"][0].get("delta", {})
-                    if "content" in delta:
+                    if delta and "content" in delta:
                         token = delta["content"]
-                        print(token, end="", flush=True)
-                        full.append(token)
-                except (json.JSONDecodeError, KeyError, IndexError):
+                        if token is not None:
+                            print(token, end="", flush=True)
+                            full.append(token)
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                     continue
         print()
         return "".join(full)
@@ -70,7 +74,8 @@ llm = VanillaLLM(BASE_URL)
 
 if __name__ == "__main__":
     try:
-        prompt = " ".join(sys.argv[1:]) or input("> ")
+        # prompt = " ".join(sys.argv[1:]) or input("> ")
+        prompt = " ".join(sys.argv[1:]) or prompt("> ", vi_mode=True)
         llm.ask([{"role": "user", "content": prompt}])
     finally:
         llm.close()
