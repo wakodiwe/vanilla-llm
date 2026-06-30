@@ -64,12 +64,37 @@ vanilla-llm/
 ├── cli.py              # One-shot CLI + VanillaLLM class
 ├── vllm/
 │   ├── __init__.py     # Package version
-│   ├── cli.py          # Alternate implementation
-│   └── utils.py        # Utility helpers (currently empty)
+│   ├── cli.py          # Alternate implementation (fuller features)
+│   └── utils.py        # Utility helpers (reserved)
 ├── models.md           # GGUF model recommendations
 ├── requirements.txt    # Python dependencies
 └── README.md           # This file
 ```
+
+## Usage
+
+### As context manager (recommended)
+
+```python
+from cli import VanillaLLM
+
+with VanillaLLM(base_url="http://localhost:8080/v1", api_key="sk-...") as llm:
+    response = llm.ask([{"role": "user", "content": "Hello!"}])
+```
+
+### Legacy module-level singleton
+
+```python
+from cli import llm
+response = llm.ask([{"role": "user", "content": "Hello!"}])
+llm.close()
+```
+
+**Note:** The module-level `llm` singleton will print a deprecation warning. Use the context manager pattern for proper resource cleanup.
+
+## API Key
+
+The default API key is `"dummy"` which works for Ollama/llama.cpp but will fail for OpenAI. A warning is printed at initialization when using the dummy key. Pass a real API key for services that require authentication.
 
 ## Dependencies
 
