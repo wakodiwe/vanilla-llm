@@ -1,159 +1,96 @@
 """
+ACMD vanilla-cli.py BufWritePost Term ./app.py
 A lightweight, zero‑bloat wrapper for OpenAI‑compatible LLM APIs.
 """
 
-from pprint import pprint
-
 import json
+import sys
 import time
-from typing import List, Dict, Optional, Generator, Any
+from typing import List, Dict, Iterator
 
 import httpx
 
 VERSION = "0.8.15"
 BASE_URL = "http://127.0.0.1:8080/v1"
-
-# MODEL = "smollm"
-# MODEL = "qwen3-coder"
-# MODEL = "llama3.2:latest"
 MODEL = "Llama-3.2-3B-Instruct-Q4_K_M"
-# models.ini
-# nomic-embed-text-latest.gguf
-# Phi-3.5-mini-instruct.Q5_K_M.gguf
-# Qwen2.5-Coder-0.5B-Q4_K_M.gguf
-# qwen3-0.6b.gguf
-# qwen3-coder.gguf
-# session-ses_0f26.md
-# smollm-135m.gguf
-# SmolLM2-360M-Instruct-Q4_K_M.gguf
-# smollm.gguf
 
 
 class VanillaLLM:
-    """A lightweight, zero‑bloat wrapper for OpenAI‑compatible LLM APIs."""
-
-    def __init__(
-        self,
-        base_url: str,
-        api_key: str = "dummy",
-        timeout: int = 120,
-        max_retries: int = 3,
-    ):
-        self.base_url = base_url.rstrip("/")
-        self.max_retries = max_retries
-
-        self.client = httpx.Client(
-            base_url=self.base_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "user-agent": f"hej {VERSION}",
-            },
+    def __init__(self, base_url: str = BASE_URL, api_key: str = "dummy", timeout: int = 120, retries: int = 3):
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {api_key}", "user-agent": f"hej {VERSION}"},
             timeout=httpx.Timeout(timeout, connect=5.0),
         )
+        self._retries = retries
 
-    def _post_with_retry(
-        self, endpoint: str, json_data: Dict[str, Any]
-    ) -> httpx.Response:
-        last_exception = None
-        for attempt in range(self.max_retries):
+    def _post(self, endpoint: str, data: dict) -> httpx.Response:
+        last_err = None
+        for attempt in range(self._retries):
             try:
-                response = self.client.post(endpoint, json=json_data)
-                response.raise_for_status()  # raises on 4xx/5xx
-                return response
+                r = self._client.post(endpoint, json=data)
+                r.raise_for_status()
+                return r
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
-                last_exception = e
-                wait_time = 2**attempt  # 1, 2, 4, 8... seconds
-                print(f"Attempt {attempt + 1} failed. Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-        raise last_exception  # if all retries fail, re-raise the last error
+                last_err = e
+                time.sleep(2 ** attempt)
+                print(f"Attempt {attempt + 1} failed. Retrying...")
+        raise last_err
 
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        model: str = MODEL,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        **kwargs,
-    ) -> str:
-        payload = {
+    def _build_payload(self, messages, model, temperature, max_tokens, stream, **kw):
+        return {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "stream": False,  # we'll handle streaming separately
-            **kwargs,  # allow extra params like top_p, stop, etc.
+            "stream": stream,
+            **kw,
         }
-        response = self._post_with_retry("/chat/completions", payload)
-        data = response.json()
-        choice = data["choices"][0]
-        if "message" in choice and "content" in choice["message"]:
-            return choice["message"]["content"]
-        return ""  # fallback in case of unexpected structure
 
-    def stream(
-        self,
-        messages: List[Dict[str, str]],
-        model: str = MODEL,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        **kwargs,
-    ) -> Generator[str, None, None]:
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True,
-            **kwargs,
-        }
-        with self.client.stream("POST", "/chat/completions", json=payload) as stream:
-            stream.raise_for_status()
-            for line in stream.iter_lines():
+    def chat(self, messages: List[Dict[str, str]], model: str = MODEL, **kw) -> str:
+        payload = self._build_payload(messages, model, 0.7, 1024, False, **kw)
+        data = self._post("/chat/completions", payload).json()
+        return data["choices"][0].get("message", {}).get("content", "")
+
+    def stream(self, messages: List[Dict[str, str]], model: str = MODEL, **kw) -> Iterator[str]:
+        payload = self._build_payload(messages, model, 0.7, 1024, True, **kw)
+        with self._client.stream("POST", "/chat/completions", json=payload) as s:
+            s.raise_for_status()
+            for line in s.iter_lines():
                 if not line.startswith("data: "):
                     continue
-                chunk_data = line[6:]  # remove "data: " prefix
-                if chunk_data == "[DONE]":
+                chunk = line[6:]
+                if chunk == "[DONE]":
                     break
                 try:
-                    parsed = json.loads(chunk_data)
-                    delta = parsed["choices"][0].get("delta", {})
+                    delta = json.loads(chunk)["choices"][0].get("delta", {})
                     if "content" in delta:
                         yield delta["content"]
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
-    def stream_print(
-        self,
-        messages: List[Dict[str, str]],
-        model: str = MODEL,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        **kwargs,
-    ) -> str:
-        """Stream and print tokens in real-time, return full response."""
+    def stream_print(self, messages, *, model: str = MODEL, **kw) -> str:
+        print("Assistant: ", end="", flush=True)
         full = []
-        for token in self.stream(messages, model, temperature, max_tokens, **kwargs):
+        for token in self.stream(messages, model, **kw):
             if token:
                 print(token, end="", flush=True)
                 full.append(token)
-        print()  # newline at end
+        print()
         return "".join(full)
 
-    def close(self) -> None:
-        self.client.close()
+    def close(self):
+        self._client.close()
 
-    def __enter__(self):
-        return self
+    __enter__ = lambda self, *a: self
+    __exit__ = lambda self, *a: self.close() or None
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
 
 llm = VanillaLLM(BASE_URL)
 
-def run(prompt):
-    reply = llm.chat([{"role": "user", "content": prompt}])
-    print(reply)
-
-def stream(prompt):
-    reply = llm.stream_print([{"role": "user", "content": prompt}])
-
+if __name__ == "__main__":
+    try:
+        prompt = " ".join(sys.argv[1:]) or input("> ")
+        llm.stream_print([{"role": "user", "content": prompt}])
+    finally:
+        llm.close()
