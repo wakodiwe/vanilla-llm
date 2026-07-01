@@ -1,24 +1,27 @@
+#!/usr/bin/env python
 """
-A lightweight, zero‑bloat wrapper for OpenAI‑compatible LLM APIs.
+VanillaLLM - A lightweight, zero‑bloat wrapper for OpenAI‑compatible LLM APIs.
 """
 
 import json
 import logging
+import os
 import sys
 import time
 from typing import Any, Dict, List, Optional
 
-from prompt_toolkit import prompt
-
 import httpx
+from prompt_toolkit import PromptSession, prompt
+from prompt_toolkit.history import FileHistory
 
 
-logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
 BASE_URL = "http://127.0.0.1:8080/v1"
 MODEL = "Llama-3.2-3B-Instruct-Q4_K_M"
+HISTORY_FILE = os.path.expanduser("~/.vanillachat_history")
 
 
 class VanillaLLM:
@@ -30,11 +33,12 @@ class VanillaLLM:
         api_key: str = "dummy",
         timeout: int = 120,
         max_retries: int = 3,
+        warn_api_key: bool = True,
     ):
-        if api_key == "dummy":
+        if api_key == "dummy" and warn_api_key and not base_url.startswith("http://127.0.0.1") and not base_url.startswith("http://localhost"):
             logger.warning(
-                "Using dummy API key. This works for Ollama/llama.cpp but "
-                "will fail for OpenAI. Pass a real API key for other services."
+                "Using dummy API key. This may fail for non-local servers. "
+                "Pass a real API key if needed."
             )
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
@@ -119,23 +123,79 @@ class VanillaLLM:
         return "".join(full)
 
 
+def chat(base_url: str = BASE_URL, model: str = MODEL) -> None:
+    """Interactive chatbot REPL."""
+    conv: List[Dict[str, str]] = [{"role": "system", "content": "You are a helpful assistant."}]
+    session = PromptSession(history=FileHistory(HISTORY_FILE), vi_mode=True)
+
+    with VanillaLLM(base_url) as llm:
+        print("Welcome to VanillaChat! Type 'exit' or press Ctrl+D to quit.")
+        while True:
+            try:
+                user = session.prompt("You: ")
+            except EOFError:
+                print("\nBye.")
+                break
+            if user.lower() in ("exit", "quit"):
+                print("Bye.")
+                break
+            conv.append({"role": "user", "content": user})
+            conv.append({"role": "assistant", "content": llm.ask(conv, model=model)})
+
+
 def main() -> None:
-    """CLI entry point."""
-    with VanillaLLM(BASE_URL) as llm:
-        prompt_text = " ".join(sys.argv[1:]) or prompt("> ", vi_mode=True)
-        llm.ask([{"role": "user", "content": prompt_text}])
+    """CLI entry point - interactive if no args, one-shot otherwise."""
+    base_url = BASE_URL
+    model = MODEL
+
+    args = sys.argv[1:]
+    if "--help" in args or "-h" in args:
+        print("Usage: vllm.py [options] [message]")
+        print("       vllm.py                 # Interactive chat")
+        print("       vllm.py 'Hello!'       # One-shot")
+        print("       echo 'Hi' | vllm.py     # Piped input")
+        print("  --url URL    Base URL (default: http://127.0.0.1:8080/v1)")
+        print("  --model M   Model name")
+        sys.exit(0)
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--url" and i + 1 < len(args):
+            base_url = args[i + 1]
+            i += 2
+        elif args[i] == "--model" and i + 1 < len(args):
+            model = args[i + 1]
+            i += 2
+        else:
+            break
+
+    message = " ".join(args[i:])
+    piped = ""
+
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+
+    with VanillaLLM(base_url) as llm:
+        if message or piped:
+            prompt = piped or message
+            llm.ask([{"role": "user", "content": prompt}], model=model)
+        else:
+            chat(base_url, model)
 
 
 def get_llm(base_url: str = BASE_URL, api_key: str = "dummy", **kwargs: Any) -> VanillaLLM:
-    """Factory function to create VanillaLLM instances with proper resource management."""
+    """Factory function to create VanillaLLM instances."""
     return VanillaLLM(base_url=base_url, api_key=api_key, **kwargs)
 
 
-llm: VanillaLLM = VanillaLLM(BASE_URL)
-logger.warning(
-    "Module-level 'llm' singleton is deprecated. Use 'with VanillaLLM(...) as llm:' "
-    "or get_llm() for proper resource management."
-)
+def __getattr__(name: str) -> Any:
+    if name == "llm":
+        logger.warning(
+            "Module-level 'llm' is deprecated. Use 'with VanillaLLM(...) as llm:' "
+            "or get_llm() for proper resource management."
+        )
+        return VanillaLLM(BASE_URL)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":
